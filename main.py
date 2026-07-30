@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import plotly.express as px
 
 st.set_page_config(page_title="박스오피스 대시보드 및 데이터 분석", layout="wide")
-st.title("🎬 박스오피스 대시보드 & 계절별 분석")
+st.title("🎬 박스오피스 대시보드 & 월간/계절별 분석")
 
 # 비밀 금고에서 인증키 꺼내기
 KOBIS_KEY = st.secrets.get("KOBIS_KEY", "")
@@ -31,8 +31,8 @@ def get_box_office_data(key, dt):
         pass
     return None
 
-# 탭 구성: 1) 일별 대시보드, 2) 계절별 총량 분석
-tab1, tab2 = st.tabs(["🗓️ 일별 박스오피스", "🍂 계절별 박스오피스 총량 분석"])
+# 탭 구성: 1) 일별 대시보드, 2) 월간 및 계절별 총량 분석
+tab1, tab2 = st.tabs(["🗓️ 일별 박스오피스", "📊 월간 & 계절별 극장가 분석"])
 
 # ==========================================
 # TAB 1: 일별 박스오피스
@@ -113,18 +113,18 @@ with tab1:
             st.bar_chart(top5.set_index("영화명")["관객수"], horizontal=True)
 
 # ==========================================
-# TAB 2: 계절별 박스오피스 총량 분석
+# TAB 2: 월간 & 계절별 극장가 분석
 # ==========================================
 with tab2:
-    st.subheader("❄️🌸☀️🍂 계절별 극장가 관객 총량 분석")
+    st.subheader("🍂 월간 데이터 기반 계절별 극장가 총량 분석")
     st.markdown("""
-    지정한 기간 동안 일별 박스오피스 TOP 10 전체 관객수 및 매출액을 수집하여 **계절별(봄·여름·가을·겨울)** 총 극장 이용 트렌드를 분석합니다.
+    설정한 기간 동안의 **월별(1월~12월) 관객 데이터**를 집계하고, 이를 **계절(봄·여름·가을·겨울)** 단위로 재구성하여 극장가의 성수기와 비수기 흐름을 분석합니다.
     """)
 
     # 기간 선택 (기본값: 최근 1년)
     col_s, col_e = st.columns(2)
-    start_date = col_s.date_input("분석 시작일", value=yesterday - timedelta(days=365), max_value=yesterday, key="season_start")
-    end_date = col_e.date_input("분석 종료일", value=yesterday, max_value=yesterday, key="season_end")
+    start_date = col_s.date_input("분석 시작일", value=yesterday - timedelta(days=365), max_value=yesterday, key="m_season_start")
+    end_date = col_e.date_input("분석 종료일", value=yesterday, max_value=yesterday, key="m_season_end")
 
     if start_date > end_date:
         st.error("시작일은 종료일보다 이전이어야 합니다.")
@@ -132,21 +132,18 @@ with tab2:
 
     days_diff = (end_date - start_date).days + 1
 
-    if days_diff > 366:
-        st.warning("⚠️ API 호출량이 많아 분석 기간이 1년을 초과하면 시간이 다소 걸릴 수 있습니다.")
-
-    if st.button("🚀 계절별 데이터 수집 및 분석 시작", type="primary"):
+    if st.button("🚀 월간 및 계절 데이터 분석 시작", type="primary"):
         daily_records = []
         progress_bar = st.progress(0)
         status_text = st.empty()
 
-        # 일별 데이터 수집
         curr_date = start_date
         step = 0
 
+        # 일별 데이터 수집
         while curr_date <= end_date:
             dt_str = curr_date.strftime("%Y%m%d")
-            status_text.text(f"데이터 수집 중... ({curr_date.strftime('%Y-%m-%d')} / {step + 1}/{days_diff}일)")
+            status_text.text(f"일별 데이터 수집 중... ({curr_date.strftime('%Y-%m-%d')} / {step + 1}/{days_diff}일)")
             
             res_data = get_box_office_data(KOBIS_KEY, dt_str)
             if res_data and "boxOfficeResult" in res_data:
@@ -155,22 +152,11 @@ with tab2:
                     tot_audi = sum(int(m.get("audiCnt", 0)) for m in daily_list)
                     tot_sales = sum(int(m.get("salesAmt", 0)) for m in daily_list)
                     
-                    # 월 기준으로 계절 분류
-                    month = curr_date.month
-                    if month in [3, 4, 5]:
-                        season = "봄 (3~5월)"
-                    elif month in [6, 7, 8]:
-                        season = "여름 (6~8월)"
-                    elif month in [9, 10, 11]:
-                        season = "가을 (9~11월)"
-                    else:
-                        season = "겨울 (12~2월)"
-
                     daily_records.append({
                         "date": curr_date,
-                        "year": curr_date.year,
-                        "month": month,
-                        "season": season,
+                        "year_month": curr_date.strftime("%Y-%m"),
+                        "month": curr_date.month,
+                        "month_name": f"{curr_date.month}월",
                         "total_audi": tot_audi,
                         "total_sales": tot_sales
                     })
@@ -185,42 +171,76 @@ with tab2:
         if not daily_records:
             st.warning("수집된 박스오피스 데이터가 없습니다.")
         else:
-            season_df = pd.DataFrame(daily_records)
+            df_daily = pd.DataFrame(daily_records)
 
-            # 계절 순서 정렬을 위한 Categorical 설정
-            season_order = ["봄 (3~5월)", "여름 (6~8월)", "가을 (9~11월)", "겨울 (12~2월)"]
-            season_df["season"] = pd.Categorical(season_df["season"], categories=season_order, ordered=True)
+            # 월 기준으로 계절 라벨 할당 함수
+            def get_season(month):
+                if month in [3, 4, 5]:
+                    return "봄 (3~5월)"
+                elif month in [6, 7, 8]:
+                    return "여름 (6~8월)"
+                elif month in [9, 10, 11]:
+                    return "가을 (9~11월)"
+                else:
+                    return "겨울 (12~2월)"
 
-            # 계절별 집계
-            summary = season_df.groupby("season", observed=False).agg(
-                총관객수=("total_audi", "sum"),
-                총매출액=("total_sales", "sum"),
+            df_daily["season"] = df_daily["month"].apply(get_season)
+
+            # 1. 월별 집계 (Year-Month 기준)
+            monthly_summary = df_daily.groupby(["year_month", "month", "month_name", "season"], as_index=False).agg(
+                월총관객수=("total_audi", "sum"),
+                월총매출액=("total_sales", "sum"),
                 조회일수=("date", "count"),
                 일평균관객수=("total_audi", "mean")
-            ).reset_index()
+            ).sort_values("year_month")
+
+            # 2. 계절별 통합 집계
+            season_order = ["봄 (3~5월)", "여름 (6~8월)", "가을 (9~11월)", "겨울 (12~2월)"]
+            season_summary = df_daily.groupby("season", observed=False).agg(
+                계절총관객수=("total_audi", "sum"),
+                계절총매출액=("total_sales", "sum"),
+                조회일수=("date", "count"),
+                일평균관객수=("total_audi", "mean")
+            ).reindex(season_order).reset_index()
 
             # 요약 지표 카드
-            best_season = summary.sort_values("총관객수", ascending=False).iloc[0]
+            best_month = monthly_summary.sort_values("월총관객수", ascending=False).iloc[0]
+            best_season = season_summary.sort_values("계절총관객수", ascending=False).iloc[0]
+
             m1, m2, m3 = st.columns(3)
-            m1.metric("총 분석 일수", f"{len(season_df)}일")
-            m2.metric("가장 관객이 많은 계절", f"{best_season['season']}")
-            m3.metric("해당 계절 일평균 관객수", f"{int(best_season['일평균관객수']):,}명")
+            m1.metric("총 분석 기간", f"{len(monthly_summary)}개 월 ({len(df_daily)}일)")
+            m2.metric("가장 관객이 많았던 월", f"{best_month['year_month']} ({int(best_month['월총관객수']):,}명)")
+            m3.metric("가장 관객이 많은 계절", f"{best_season['season']}")
 
             st.divider()
 
-            # 시각화 (Plotly)
+            # 차트 1: 월별 관객수 변화 추이 (선 그래프)
+            st.markdown("##### 📈 월별 관객수 추이")
+            fig_line = px.line(
+                monthly_summary,
+                x="year_month",
+                y="월총관객수",
+                color="season",
+                markers=True,
+                labels={"year_month": "연월", "월총관객수": "월 총 관객수(명)", "season": "계절"},
+                title="월별 관객수 흐름 (계절별 색상 구분)"
+            )
+            fig_line.update_traces(line_width=3, marker_size=8)
+            st.plotly_chart(fig_line, use_container_width=True)
+
+            # 차트 2 & 3: 계절별 비교 (막대/파이 차트)
             chart_col1, chart_col2 = st.columns(2)
 
             with chart_col1:
                 st.markdown("##### 📊 계절별 총 관객수 비교")
                 fig_bar = px.bar(
-                    summary,
+                    season_summary,
                     x="season",
-                    y="총관객수",
+                    y="계절총관객수",
                     color="season",
                     text_auto=",.0f",
-                    labels={"season": "계절", "총관객수": "총 관객수(명)"},
-                    color_discrete_sequence=px.colors.qualitative.Pastel
+                    labels={"season": "계절", "계절총관객수": "총 관객수(명)"},
+                    color_discrete_sequence=px.colors.qualitative.Set2
                 )
                 fig_bar.update_traces(textposition="outside")
                 fig_bar.update_layout(showlegend=False, yaxis_title="총 관객수 (명)")
@@ -229,22 +249,24 @@ with tab2:
             with chart_col2:
                 st.markdown("##### 🥧 계절별 관객 점유율")
                 fig_pie = px.pie(
-                    summary,
+                    season_summary,
                     names="season",
-                    values="총관객수",
+                    values="계절총관객수",
                     hole=0.4,
-                    color_discrete_sequence=px.colors.qualitative.Pastel
+                    color_discrete_sequence=px.colors.qualitative.Set2
                 )
                 fig_pie.update_traces(textinfo="percent+label")
                 st.plotly_chart(fig_pie, use_container_width=True)
 
             # 데이터 표
-            st.markdown("##### 📋 계절별 집계 상세 데이터")
+            st.markdown("##### 📋 월별 상세 데이터")
             st.dataframe(
-                summary,
+                monthly_summary[["year_month", "season", "월총관객수", "월총매출액", "조회일수", "일평균관객수"]],
                 column_config={
-                    "총관객수": st.column_config.NumberColumn(format="%d명"),
-                    "총매출액": st.column_config.NumberColumn(format="%d원"),
+                    "year_month": "연-월",
+                    "season": "계절",
+                    "월총관객수": st.column_config.NumberColumn(format="%d명"),
+                    "월총매출액": st.column_config.NumberColumn(format="%d원"),
                     "조회일수": st.column_config.NumberColumn(format="%d일"),
                     "일평균관객수": st.column_config.NumberColumn(format="%d명"),
                 },
